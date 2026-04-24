@@ -9,7 +9,7 @@ import re
 st.title("🌲 ForestData Cleaner")
 st.markdown("""
 Upload USDA timber sales PDF data.  
-This tool extracts sold volume (MBF) totals and displays them in a combined chart across all regions.
+This tool extracts sold volume (MBF) totals and displays them separated by year and region.
 """)
 
 uploaded_files = st.file_uploader("Upload Timber Sales PDFs", type="pdf", accept_multiple_files=True)
@@ -47,7 +47,7 @@ def extract_sold_volume(uploaded_file):
                 all_rows.extend(table)
 
     if not all_rows:
-        return None
+        return None, "No table data found in PDF"
 
     df = pd.DataFrame(all_rows)
 
@@ -117,7 +117,7 @@ def extract_sold_volume(uploaded_file):
                 break
 
     if not sold_col:
-        return None
+        return None, f"No sold volume column found. Columns detected: {', '.join(df.columns.tolist())}"
 
     # Clean the sold volume column
     def clean_numeric(x):
@@ -134,18 +134,21 @@ def extract_sold_volume(uploaded_file):
     df[sold_col] = df[sold_col].apply(clean_numeric)
     df = df.dropna(subset=[sold_col])
 
+    if df.empty:
+        return None, "Sold volume column found but contained no valid numeric data"
+
     # ----------------------------
-    # Build result using filename year — single year per file
+    # Parse year and region from filename
     # ----------------------------
     filename_year = parse_year(uploaded_file.name)
     region = parse_region(uploaded_file.name)
 
     result = df[[sold_col]].copy()
     result.columns = ["Sold Volume (MBF)"]
-    result["Year"] = filename_year
+    result["Year"] = filename_year if filename_year else "Unknown"
     result["Region"] = region
 
-    return result[["Region", "Year", "Sold Volume (MBF)"]]
+    return result[["Region", "Year", "Sold Volume (MBF)"]], None
 
 
 # ----------------------------
@@ -153,35 +156,53 @@ def extract_sold_volume(uploaded_file):
 # ----------------------------
 if uploaded_files:
     all_results = []
+    skipped = []
 
     for uploaded_file in uploaded_files:
         with st.spinner(f"Processing {uploaded_file.name}..."):
-            result = extract_sold_volume(uploaded_file)
+            result, error = extract_sold_volume(uploaded_file)
+            region = parse_region(uploaded_file.name)
+            year = parse_year(uploaded_file.name)
+
             if result is None:
-                st.warning(f"⚠️ Could not extract sold volume from `{uploaded_file.name}`. Skipping.")
+                st.warning(f"⚠️ Skipped `{uploaded_file.name}`: {error}")
+                skipped.append({"File": uploaded_file.name, "Reason": error})
             else:
-                region = parse_region(uploaded_file.name)
-                year = parse_year(uploaded_file.name)
-                st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year}** — {len(result)} rows extracted")
+                year_label = str(year) if year else "Unknown Year"
+                st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {len(result)} rows extracted")
                 all_results.append(result)
+
+    if skipped:
+        with st.expander("⚠️ Skipped files — click to expand"):
+            st.dataframe(pd.DataFrame(skipped))
 
     if all_results:
         combined = pd.concat(all_results, ignore_index=True)
 
-        # Aggregate to one row per region per year
-        combined = combined.groupby(["Region", "Year"], as_index=False)["Sold Volume (MBF)"].sum()
+        # Aggregate to one total per region per year
+        combined = combined.groupby(["Year", "Region"], as_index=False)["Sold Volume (MBF)"].sum()
+        combined = combined.sort_values(["Year", "Region"]).reset_index(drop=True)
 
         # ----------------------------
         # 📄 COMBINED DATA TABLE
         # ----------------------------
         st.subheader("📄 Combined Sold Volume Data")
-        st.dataframe(combined)
+
+        # Filter by year
+        years_available = sorted(combined["Year"].unique())
+        selected_years = st.multiselect(
+            "Filter by year (leave blank to show all):",
+            options=years_available,
+            default=years_available
+        )
+        filtered = combined[combined["Year"].isin(selected_years)]
+        st.dataframe(filtered)
 
         # ----------------------------
-        # 📊 PIVOT TABLE
+        # 📊 PIVOT TABLE — rows = Year, columns = Region
         # ----------------------------
         st.subheader("📊 Sold Volume (MBF) by Year & Region (Pivot)")
-        pivot = combined.pivot_table(
+        pivot = filtered.pivot_table(
             index="Year",
             columns="Region",
             values="Sold Volume (MBF)",
@@ -192,25 +213,26 @@ if uploaded_files:
         st.dataframe(pivot.style.format("{:,.2f}"))
 
         # ----------------------------
-        # 📈 CHART
+        # 📈 CHART — each region is its own line, x axis = year
         # ----------------------------
         st.subheader("📈 Sold Volume (MBF) Over Time by Region")
-        st.line_chart(pivot.drop(columns=["Grand Total"]))
+        chart_data = pivot.drop(columns=["Grand Total"])
+        st.line_chart(chart_data)
 
         # ----------------------------
         # ⚠️ DATA QUALITY REPORT
         # ----------------------------
         st.subheader("⚠️ Data Quality Report")
         st.write(f"Files processed: {len(all_results)}")
+        st.write(f"Files skipped: {len(skipped)}")
+        st.write(f"Years found: {', '.join(str(y) for y in years_available)}")
         st.write(f"Regions found: {', '.join(sorted(combined['Region'].unique()))}")
-        st.write(f"Years found: {', '.join(str(y) for y in sorted(combined['Year'].dropna().unique().astype(int)))}")
-        st.write(f"Total rows extracted: {len(combined)}")
+        st.write(f"Total rows: {len(combined)}")
         missing = combined.isnull().sum().sum()
-        st.write(f"Missing values: {missing}")
         if missing == 0:
             st.success("No missing values detected!")
         else:
-            st.write("Columns with issues:")
+            st.write(f"Missing values: {missing}")
             st.write(combined.isnull().sum()[combined.isnull().sum() > 0])
 
         # ----------------------------
