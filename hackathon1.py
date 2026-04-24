@@ -49,10 +49,10 @@ if uploaded_file:
     # ----------------------------
     # 4. Clean structure
     # ----------------------------
-    df = df.dropna(axis=1, how="all")  # remove empty columns
+    df = df.dropna(axis=1, how="all")
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Rename first column to Forest (important for USDA data)
+    # Rename first column to Forest
     df = df.rename(columns={df.columns[0]: "Forest"})
 
     # Clean forest names
@@ -61,14 +61,14 @@ if uploaded_file:
     # ----------------------------
     # 5. Convert numeric columns safely
     # ----------------------------
-   for col in df.columns:
-    if col != "Forest":
-        df[col] = (
-            df[col]
-            .astype(str)
-            .str.replace(",", "")
-        )
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in df.columns:
+        if col != "Forest":
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "")
+            )
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.reset_index(drop=True)
 
@@ -103,7 +103,7 @@ if uploaded_file:
         st.success("No missing values detected!")
 
     # ----------------------------
-    # 📊 SIMPLE VISUALIZATION
+    # 📊 VISUALIZATION
     # ----------------------------
     st.subheader("📊 Timber Trends Preview")
 
@@ -120,7 +120,7 @@ if uploaded_file:
     csv = df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        "💾 Download Clean Excel Data (CSV)",
+        "💾 Download Clean Data (CSV)",
         csv,
         "forest_clean_data.csv",
         "text/csv"
