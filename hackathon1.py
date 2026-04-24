@@ -9,10 +9,20 @@ import re
 st.title("🌲 ForestData Cleaner")
 st.markdown("""
 Upload USDA timber sales PDF data.  
-This tool extracts sold volume totals and displays them in a combined chart across all uploaded files.
+This tool extracts sold volume (MBF) totals and displays them in a combined chart across all regions.
 """)
 
 uploaded_files = st.file_uploader("Upload Timber Sales PDFs", type="pdf", accept_multiple_files=True)
+
+# ----------------------------
+# HELPER: Parse region from filename
+# e.g. "2025-q4-cut-sold-r01.pdf" → "Region 01"
+# ----------------------------
+def parse_region(filename):
+    match = re.search(r'r(\d+)', filename, re.IGNORECASE)
+    if match:
+        return f"Region {match.group(1).zfill(2)}"
+    return filename
 
 # ----------------------------
 # HELPER: Extract sold volume from a single PDF
@@ -58,22 +68,38 @@ def extract_sold_volume(uploaded_file):
     df.columns = [str(c).strip() for c in df.columns]
 
     # ----------------------------
-    # Find the sold volume column
+    # Find the sold volume column — prioritize MBF
     # ----------------------------
     sold_col = None
+
+    # 1st priority: sold volume MBF
     for col in df.columns:
-        if re.search(r"sold.{0,10}vol", col, re.IGNORECASE):
+        if re.search(r"sold.{0,20}mbf", col, re.IGNORECASE):
             sold_col = col
             break
 
-    # Fallback: look for any column with "volume" in the name
+    # 2nd priority: any MBF column
+    if not sold_col:
+        for col in df.columns:
+            if "mbf" in col.lower():
+                sold_col = col
+                break
+
+    # 3rd priority: sold + volume together
+    if not sold_col:
+        for col in df.columns:
+            if re.search(r"sold.{0,10}vol", col, re.IGNORECASE):
+                sold_col = col
+                break
+
+    # 4th priority: any volume column
     if not sold_col:
         for col in df.columns:
             if "volume" in col.lower():
                 sold_col = col
                 break
 
-    # Fallback: look for any column with "sold" in the name
+    # 5th priority: any sold column
     if not sold_col:
         for col in df.columns:
             if "sold" in col.lower():
@@ -113,18 +139,18 @@ def extract_sold_volume(uploaded_file):
     if year_col:
         df[year_col] = df[year_col].astype(str).str.strip()
         result = df[[year_col, sold_col]].copy()
-        result.columns = ["Year", "Sold Volume"]
+        result.columns = ["Year", "Sold Volume (MBF)"]
         result["Year"] = pd.to_numeric(result["Year"], errors="coerce")
         result = result.dropna(subset=["Year"])
         result["Year"] = result["Year"].astype(int)
     else:
-        # No year column — use row index as a sequence
         result = df[[sold_col]].copy()
-        result.columns = ["Sold Volume"]
+        result.columns = ["Sold Volume (MBF)"]
         result["Year"] = result.index + 1
 
-    result["Source File"] = uploaded_file.name
-    return result[["Source File", "Year", "Sold Volume"]]
+    region = parse_region(uploaded_file.name)
+    result["Region"] = region
+    return result[["Region", "Year", "Sold Volume (MBF)"]]
 
 
 # ----------------------------
@@ -139,7 +165,8 @@ if uploaded_files:
             if result is None:
                 st.warning(f"⚠️ Could not extract sold volume from `{uploaded_file.name}`. Skipping.")
             else:
-                st.success(f"✅ Extracted {len(result)} rows from `{uploaded_file.name}`")
+                region = parse_region(uploaded_file.name)
+                st.success(f"✅ `{uploaded_file.name}` → **{region}** — {len(result)} rows extracted")
                 all_results.append(result)
 
     if all_results:
@@ -152,13 +179,13 @@ if uploaded_files:
         st.dataframe(combined)
 
         # ----------------------------
-        # 📊 PIVOT TABLE (matches your Excel layout)
+        # 📊 PIVOT TABLE
         # ----------------------------
-        st.subheader("📊 Sold Volume by Year (Pivot)")
+        st.subheader("📊 Sold Volume (MBF) by Year & Region (Pivot)")
         pivot = combined.pivot_table(
             index="Year",
-            columns="Source File",
-            values="Sold Volume",
+            columns="Region",
+            values="Sold Volume (MBF)",
             aggfunc="sum"
         )
         pivot["Grand Total"] = pivot.sum(axis=1)
@@ -168,7 +195,7 @@ if uploaded_files:
         # ----------------------------
         # 📈 CHART
         # ----------------------------
-        st.subheader("📈 Sold Volume Over Time")
+        st.subheader("📈 Sold Volume (MBF) Over Time by Region")
         st.line_chart(pivot.drop(columns=["Grand Total"]))
 
         # ----------------------------
@@ -176,11 +203,15 @@ if uploaded_files:
         # ----------------------------
         st.subheader("⚠️ Data Quality Report")
         st.write(f"Files processed: {len(all_results)}")
+        st.write(f"Regions found: {', '.join(sorted(combined['Region'].unique()))}")
         st.write(f"Total rows extracted: {len(combined)}")
         missing = combined.isnull().sum().sum()
         st.write(f"Missing values: {missing}")
         if missing == 0:
             st.success("No missing values detected!")
+        else:
+            st.write("Columns with issues:")
+            st.write(combined.isnull().sum()[combined.isnull().sum() > 0])
 
         # ----------------------------
         # 💾 DOWNLOADS
