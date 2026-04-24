@@ -6,7 +6,6 @@ import pandas as pd
 # APP TITLE
 # ----------------------------
 st.title("🌲 ForestData Cleaner")
-
 st.markdown("""
 Upload USDA timber sales PDF data.  
 This tool extracts, cleans, and converts it into Excel-ready format while flagging data issues.
@@ -18,7 +17,6 @@ uploaded_file = st.file_uploader("Upload Timber Sales PDF", type="pdf")
 # MAIN PROCESS
 # ----------------------------
 if uploaded_file:
-
     all_rows = []
 
     # ----------------------------
@@ -41,10 +39,31 @@ if uploaded_file:
     df = pd.DataFrame(all_rows)
 
     # ----------------------------
-    # 3. Fix header row
+    # 3. Fix header row — SAFE VERSION
     # ----------------------------
-    df.columns = df.iloc[0]
-    df = df[1:]
+    header = df.iloc[0].tolist()
+
+    # Flatten any list/tuple cells in the header
+    header = [
+        " ".join(map(str, h)) if isinstance(h, (list, tuple)) else str(h).strip()
+        for h in header
+    ]
+
+    # Deduplicate blank/None/duplicate column names
+    seen = {}
+    clean_header = []
+    for h in header:
+        if h in ("", "None", "nan"):
+            h = f"col_{len(clean_header)}"
+        if h in seen:
+            seen[h] += 1
+            h = f"{h}_{seen[h]}"
+        else:
+            seen[h] = 0
+        clean_header.append(h)
+
+    df.columns = clean_header
+    df = df[1:].reset_index(drop=True)
 
     # ----------------------------
     # 4. Clean structure
@@ -61,22 +80,13 @@ if uploaded_file:
     # ----------------------------
     def clean_value(x):
         try:
-            # Handle weird list/tuple values from PDF
             if isinstance(x, (list, tuple)):
                 x = " ".join(map(str, x))
-
-            # Convert everything to string
             x = str(x)
-
-            # Remove commas and spaces
             x = x.replace(",", "").strip()
-
-            # Handle empty or invalid values
             if x in ["", "None", "nan"]:
                 return None
-
             return x
-
         except Exception:
             return None
 
@@ -97,7 +107,6 @@ if uploaded_file:
     # ⚠️ DATA QUALITY REPORT
     # ----------------------------
     st.subheader("⚠️ Data Quality Report")
-
     missing_values = df.isnull().sum().sum()
     total_values = df.size
     missing_percent = (missing_values / total_values) * 100
@@ -115,9 +124,7 @@ if uploaded_file:
     # 📊 VISUALIZATION
     # ----------------------------
     st.subheader("📊 Timber Trends Preview")
-
     numeric_df = df.select_dtypes(include="number")
-
     if not numeric_df.empty:
         st.line_chart(numeric_df)
     else:
@@ -127,7 +134,6 @@ if uploaded_file:
     # 💾 DOWNLOAD
     # ----------------------------
     csv = df.to_csv(index=False).encode("utf-8")
-
     st.download_button(
         "💾 Download Clean Data (CSV)",
         csv,
