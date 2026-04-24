@@ -52,22 +52,21 @@ if uploaded_file:
     df = df.dropna(axis=1, how="all")
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Rename first column to Forest
     df = df.rename(columns={df.columns[0]: "Forest"})
 
-    # Clean forest names
     df["Forest"] = df["Forest"].astype(str).str.strip()
 
     # ----------------------------
-    # 5. Convert numeric columns safely
+    # 5. STRONG SAFE CLEANING (FIXES YOUR ERROR)
     # ----------------------------
+    def clean_value(x):
+        if pd.isnull(x):
+            return x
+        return str(x).replace(",", "").strip()
+
     for col in df.columns:
         if col != "Forest":
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace(",", "")
-            )
+            df[col] = df[col].apply(clean_value)
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.reset_index(drop=True)
