@@ -82,34 +82,25 @@ def extract_sold_volume(uploaded_file):
     # ----------------------------
     sold_col = None
 
-    # 1st priority: sold volume MBF
     for col in df.columns:
         if re.search(r"sold.{0,20}mbf", col, re.IGNORECASE):
             sold_col = col
             break
-
-    # 2nd priority: any MBF column
     if not sold_col:
         for col in df.columns:
             if "mbf" in col.lower():
                 sold_col = col
                 break
-
-    # 3rd priority: sold + volume together
     if not sold_col:
         for col in df.columns:
             if re.search(r"sold.{0,10}vol", col, re.IGNORECASE):
                 sold_col = col
                 break
-
-    # 4th priority: any volume column
     if not sold_col:
         for col in df.columns:
             if "volume" in col.lower():
                 sold_col = col
                 break
-
-    # 5th priority: any sold column
     if not sold_col:
         for col in df.columns:
             if "sold" in col.lower():
@@ -119,7 +110,7 @@ def extract_sold_volume(uploaded_file):
     if not sold_col:
         return None, f"No sold volume column found. Columns detected: {', '.join(df.columns.tolist())}"
 
-    # Clean the sold volume column
+    # Clean numeric helper
     def clean_numeric(x):
         try:
             if isinstance(x, (list, tuple)):
@@ -131,24 +122,59 @@ def extract_sold_volume(uploaded_file):
         except Exception:
             return None
 
+    # ----------------------------
+    # Look for the grand total row first
+    # Matches "Region (...) Total", "Grand Total", "Total"
+    # ----------------------------
+    total_row = None
+
+    for col in df.columns:
+        matches = df[df[col].astype(str).str.contains(
+            r'total', case=False, na=False
+        )]
+        if not matches.empty:
+            # Prefer rows that also mention "region" — most specific total
+            region_total = matches[matches[col].astype(str).str.contains(
+                r'region', case=False, na=False
+            )]
+            if not region_total.empty:
+                total_row = region_total.iloc[-1]
+            else:
+                total_row = matches.iloc[-1]
+            break
+
+    if total_row is not None:
+        raw_val = clean_numeric(total_row[sold_col])
+        if raw_val is not None:
+            filename_year = parse_year(uploaded_file.name)
+            region = parse_region(uploaded_file.name)
+            result = pd.DataFrame([{
+                "Region": region,
+                "Year": filename_year if filename_year else "Unknown",
+                "Sold Volume (MBF)": raw_val
+            }])
+            return result[["Region", "Year", "Sold Volume (MBF)"]], None
+
+    # ----------------------------
+    # Fallback: if no total row found, sum all rows
+    # ----------------------------
     df[sold_col] = df[sold_col].apply(clean_numeric)
     df = df.dropna(subset=[sold_col])
 
     if df.empty:
         return None, "Sold volume column found but contained no valid numeric data"
 
-    # ----------------------------
-    # Parse year and region from filename
-    # ----------------------------
     filename_year = parse_year(uploaded_file.name)
     region = parse_region(uploaded_file.name)
 
-    result = df[[sold_col]].copy()
-    result.columns = ["Sold Volume (MBF)"]
-    result["Year"] = filename_year if filename_year else "Unknown"
-    result["Region"] = region
+    total = df[sold_col].sum()
+    result = pd.DataFrame([{
+        "Region": region,
+        "Year": filename_year if filename_year else "Unknown",
+        "Sold Volume (MBF)": total
+    }])
 
-    return result[["Region", "Year", "Sold Volume (MBF)"]], None
+    return result[["Region", "Year", "Sold Volume (MBF)"]], "⚠️ No grand total row found — summed all rows instead, verify this is correct"
 
 
 # ----------------------------
@@ -169,7 +195,11 @@ if uploaded_files:
                 skipped.append({"File": uploaded_file.name, "Reason": error})
             else:
                 year_label = str(year) if year else "Unknown Year"
-                st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {len(result)} rows extracted")
+                vol = result["Sold Volume (MBF)"].iloc[0]
+                if error:
+                    st.warning(f"⚠️ `{uploaded_file.name}` → **{region}** | **{year_label}** — {vol:,.2f} MBF ({error})")
+                else:
+                    st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {vol:,.2f} MBF (from grand total row)")
                 all_results.append(result)
 
     if skipped:
@@ -181,7 +211,15 @@ if uploaded_files:
 
         # Aggregate to one total per region per year
         combined = combined.groupby(["Year", "Region"], as_index=False)["Sold Volume (MBF)"].sum()
-        combined = combined.sort_values(["Year", "Region"]).reset_index(drop=True)
+
+        # Safe sort — handles mixed int/"Unknown" values
+        combined = combined.iloc[
+            sorted(range(len(combined)), key=lambda i: (
+                str(combined.iloc[i]["Year"]) == "Unknown",
+                str(combined.iloc[i]["Year"]),
+                combined.iloc[i]["Region"]
+            ))
+        ].reset_index(drop=True)
 
         # ----------------------------
         # 📄 COMBINED DATA TABLE
@@ -189,7 +227,10 @@ if uploaded_files:
         st.subheader("📄 Combined Sold Volume Data")
 
         # Filter by year — safely handles mixed int/"Unknown" types
-        years_available = sorted(combined["Year"].unique(), key=lambda x: (str(x) == "Unknown", x))
+        years_available = sorted(
+            combined["Year"].unique(),
+            key=lambda x: (str(x) == "Unknown", x)
+        )
         selected_years = st.multiselect(
             "Filter by year (leave blank to show all):",
             options=years_available,
@@ -209,7 +250,14 @@ if uploaded_files:
             aggfunc="sum"
         )
         pivot["Grand Total"] = pivot.sum(axis=1)
-        pivot = pivot.sort_index()
+
+        # Safe sort — handles mixed int/"Unknown" index
+        pivot = pivot.iloc[
+            sorted(range(len(pivot)), key=lambda i: (
+                str(pivot.index[i]) == "Unknown",
+                str(pivot.index[i])
+            ))
+        ]
         st.dataframe(pivot.style.format("{:,.2f}"))
 
         # ----------------------------
