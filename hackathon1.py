@@ -9,7 +9,7 @@ import re
 st.title("🌲 ForestData Cleaner")
 st.markdown("""
 Upload USDA timber sales PDF data.  
-This tool extracts sold volume (MBF) totals and displays them separated by year and region.
+This tool extracts sold volume (MBF) totals and displays them in a combined chart across all regions.
 """)
 
 uploaded_files = st.file_uploader("Upload Timber Sales PDFs", type="pdf", accept_multiple_files=True)
@@ -47,7 +47,7 @@ def extract_sold_volume(uploaded_file):
                 all_rows.extend(table)
 
     if not all_rows:
-        return None, "No table data found in PDF"
+        return None
 
     df = pd.DataFrame(all_rows)
 
@@ -108,7 +108,7 @@ def extract_sold_volume(uploaded_file):
                 break
 
     if not sold_col:
-        return None, f"No sold volume column found. Columns detected: {', '.join(df.columns.tolist())}"
+        return None
 
     # Clean numeric helper
     def clean_numeric(x):
@@ -122,59 +122,24 @@ def extract_sold_volume(uploaded_file):
         except Exception:
             return None
 
-    # ----------------------------
-    # Look for the grand total row first
-    # Matches "Region (...) Total", "Grand Total", "Total"
-    # ----------------------------
-    total_row = None
-
-    for col in df.columns:
-        matches = df[df[col].astype(str).str.contains(
-            r'total', case=False, na=False
-        )]
-        if not matches.empty:
-            # Prefer rows that also mention "region" — most specific total
-            region_total = matches[matches[col].astype(str).str.contains(
-                r'region', case=False, na=False
-            )]
-            if not region_total.empty:
-                total_row = region_total.iloc[-1]
-            else:
-                total_row = matches.iloc[-1]
-            break
-
-    if total_row is not None:
-        raw_val = clean_numeric(total_row[sold_col])
-        if raw_val is not None:
-            filename_year = parse_year(uploaded_file.name)
-            region = parse_region(uploaded_file.name)
-            result = pd.DataFrame([{
-                "Region": region,
-                "Year": filename_year if filename_year else "Unknown",
-                "Sold Volume (MBF)": raw_val
-            }])
-            return result[["Region", "Year", "Sold Volume (MBF)"]], None
-
-    # ----------------------------
-    # Fallback: if no total row found, sum all rows
-    # ----------------------------
     df[sold_col] = df[sold_col].apply(clean_numeric)
     df = df.dropna(subset=[sold_col])
 
     if df.empty:
-        return None, "Sold volume column found but contained no valid numeric data"
+        return None
 
-    filename_year = parse_year(uploaded_file.name)
+    # ----------------------------
+    # Year and region always from filename
+    # ----------------------------
     region = parse_region(uploaded_file.name)
+    year = parse_year(uploaded_file.name)
 
-    total = df[sold_col].sum()
-    result = pd.DataFrame([{
-        "Region": region,
-        "Year": filename_year if filename_year else "Unknown",
-        "Sold Volume (MBF)": total
-    }])
+    result = df[[sold_col]].copy()
+    result.columns = ["Sold Volume (MBF)"]
+    result["Year"] = year if year else "Unknown"
+    result["Region"] = region
 
-    return result[["Region", "Year", "Sold Volume (MBF)"]], "⚠️ No grand total row found — summed all rows instead, verify this is correct"
+    return result[["Region", "Year", "Sold Volume (MBF)"]]
 
 
 # ----------------------------
@@ -182,29 +147,19 @@ def extract_sold_volume(uploaded_file):
 # ----------------------------
 if uploaded_files:
     all_results = []
-    skipped = []
 
     for uploaded_file in uploaded_files:
         with st.spinner(f"Processing {uploaded_file.name}..."):
-            result, error = extract_sold_volume(uploaded_file)
+            result = extract_sold_volume(uploaded_file)
             region = parse_region(uploaded_file.name)
             year = parse_year(uploaded_file.name)
 
             if result is None:
-                st.warning(f"⚠️ Skipped `{uploaded_file.name}`: {error}")
-                skipped.append({"File": uploaded_file.name, "Reason": error})
+                st.warning(f"⚠️ Could not extract sold volume from `{uploaded_file.name}`. Skipping.")
             else:
                 year_label = str(year) if year else "Unknown Year"
-                vol = result["Sold Volume (MBF)"].iloc[0]
-                if error:
-                    st.warning(f"⚠️ `{uploaded_file.name}` → **{region}** | **{year_label}** — {vol:,.2f} MBF ({error})")
-                else:
-                    st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {vol:,.2f} MBF (from grand total row)")
+                st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {len(result)} rows extracted")
                 all_results.append(result)
-
-    if skipped:
-        with st.expander("⚠️ Skipped files — click to expand"):
-            st.dataframe(pd.DataFrame(skipped))
 
     if all_results:
         combined = pd.concat(all_results, ignore_index=True)
@@ -226,7 +181,6 @@ if uploaded_files:
         # ----------------------------
         st.subheader("📄 Combined Sold Volume Data")
 
-        # Filter by year — safely handles mixed int/"Unknown" types
         years_available = sorted(
             combined["Year"].unique(),
             key=lambda x: (str(x) == "Unknown", x)
@@ -264,15 +218,13 @@ if uploaded_files:
         # 📈 CHART — each region is its own line, x axis = year
         # ----------------------------
         st.subheader("📈 Sold Volume (MBF) Over Time by Region")
-        chart_data = pivot.drop(columns=["Grand Total"])
-        st.line_chart(chart_data)
+        st.line_chart(pivot.drop(columns=["Grand Total"]))
 
         # ----------------------------
         # ⚠️ DATA QUALITY REPORT
         # ----------------------------
         st.subheader("⚠️ Data Quality Report")
         st.write(f"Files processed: {len(all_results)}")
-        st.write(f"Files skipped: {len(skipped)}")
         st.write(f"Years found: {', '.join(str(y) for y in years_available)}")
         st.write(f"Regions found: {', '.join(sorted(combined['Region'].unique()))}")
         st.write(f"Total rows: {len(combined)}")
