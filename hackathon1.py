@@ -52,17 +52,33 @@ if uploaded_file:
     df = df.dropna(axis=1, how="all")
     df.columns = [str(c).strip() for c in df.columns]
 
+    # Rename first column to Forest
     df = df.rename(columns={df.columns[0]: "Forest"})
-
     df["Forest"] = df["Forest"].astype(str).str.strip()
 
     # ----------------------------
-    # 5. STRONG SAFE CLEANING (FIXES YOUR ERROR)
+    # 5. FINAL SAFE CLEANING
     # ----------------------------
     def clean_value(x):
-        if pd.isnull(x):
+        try:
+            # Handle weird list/tuple values from PDF
+            if isinstance(x, (list, tuple)):
+                x = " ".join(map(str, x))
+
+            # Convert everything to string
+            x = str(x)
+
+            # Remove commas and spaces
+            x = x.replace(",", "").strip()
+
+            # Handle empty or invalid values
+            if x in ["", "None", "nan"]:
+                return None
+
             return x
-        return str(x).replace(",", "").strip()
+
+        except Exception:
+            return None
 
     for col in df.columns:
         if col != "Forest":
@@ -72,15 +88,9 @@ if uploaded_file:
     df = df.reset_index(drop=True)
 
     # ----------------------------
-    # 📄 RAW DATA VIEW
+    # 📄 RAW DATA
     # ----------------------------
     st.subheader("📄 Raw Extracted Data")
-    st.dataframe(df)
-
-    # ----------------------------
-    # 🧹 CLEANED DATA VIEW
-    # ----------------------------
-    st.subheader("🧹 Cleaned Timber Dataset")
     st.dataframe(df)
 
     # ----------------------------
@@ -114,7 +124,7 @@ if uploaded_file:
         st.write("No numeric data available for visualization.")
 
     # ----------------------------
-    # 💾 DOWNLOAD CLEAN DATA
+    # 💾 DOWNLOAD
     # ----------------------------
     csv = df.to_csv(index=False).encode("utf-8")
 
