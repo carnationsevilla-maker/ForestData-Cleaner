@@ -25,6 +25,16 @@ def parse_region(filename):
     return filename
 
 # ----------------------------
+# HELPER: Parse year from filename
+# e.g. "2025-q4-cut-sold-r01.pdf" → 2025
+# ----------------------------
+def parse_year(filename):
+    match = re.search(r'\b(19|20)\d{2}\b', filename)
+    if match:
+        return int(match.group(0))
+    return None
+
+# ----------------------------
 # HELPER: Extract sold volume from a single PDF
 # ----------------------------
 def extract_sold_volume(uploaded_file):
@@ -109,15 +119,6 @@ def extract_sold_volume(uploaded_file):
     if not sold_col:
         return None
 
-    # ----------------------------
-    # Find the year column
-    # ----------------------------
-    year_col = None
-    for col in df.columns:
-        if re.search(r"year|date|fy|fiscal", col, re.IGNORECASE):
-            year_col = col
-            break
-
     # Clean the sold volume column
     def clean_numeric(x):
         try:
@@ -134,22 +135,16 @@ def extract_sold_volume(uploaded_file):
     df = df.dropna(subset=[sold_col])
 
     # ----------------------------
-    # Build result: year + sold volume
+    # Build result using filename year — single year per file
     # ----------------------------
-    if year_col:
-        df[year_col] = df[year_col].astype(str).str.strip()
-        result = df[[year_col, sold_col]].copy()
-        result.columns = ["Year", "Sold Volume (MBF)"]
-        result["Year"] = pd.to_numeric(result["Year"], errors="coerce")
-        result = result.dropna(subset=["Year"])
-        result["Year"] = result["Year"].astype(int)
-    else:
-        result = df[[sold_col]].copy()
-        result.columns = ["Sold Volume (MBF)"]
-        result["Year"] = result.index + 1
-
+    filename_year = parse_year(uploaded_file.name)
     region = parse_region(uploaded_file.name)
+
+    result = df[[sold_col]].copy()
+    result.columns = ["Sold Volume (MBF)"]
+    result["Year"] = filename_year
     result["Region"] = region
+
     return result[["Region", "Year", "Sold Volume (MBF)"]]
 
 
@@ -166,11 +161,15 @@ if uploaded_files:
                 st.warning(f"⚠️ Could not extract sold volume from `{uploaded_file.name}`. Skipping.")
             else:
                 region = parse_region(uploaded_file.name)
-                st.success(f"✅ `{uploaded_file.name}` → **{region}** — {len(result)} rows extracted")
+                year = parse_year(uploaded_file.name)
+                st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year}** — {len(result)} rows extracted")
                 all_results.append(result)
 
     if all_results:
         combined = pd.concat(all_results, ignore_index=True)
+
+        # Aggregate to one row per region per year
+        combined = combined.groupby(["Region", "Year"], as_index=False)["Sold Volume (MBF)"].sum()
 
         # ----------------------------
         # 📄 COMBINED DATA TABLE
@@ -204,6 +203,7 @@ if uploaded_files:
         st.subheader("⚠️ Data Quality Report")
         st.write(f"Files processed: {len(all_results)}")
         st.write(f"Regions found: {', '.join(sorted(combined['Region'].unique()))}")
+        st.write(f"Years found: {', '.join(str(y) for y in sorted(combined['Year'].dropna().unique().astype(int)))}")
         st.write(f"Total rows extracted: {len(combined)}")
         missing = combined.isnull().sum().sum()
         st.write(f"Missing values: {missing}")
