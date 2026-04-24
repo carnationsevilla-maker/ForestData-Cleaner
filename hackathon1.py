@@ -61,8 +61,9 @@ if uploaded_file:
     # ----------------------------
     # 5. Convert numeric columns safely
     # ----------------------------
-    for col in df.columns[1:]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in df.columns:
+    if col != "Forest":
+        df[col] = pd.to_numeric(df[col].astype(str), errors="coerce")
 
     df = df.reset_index(drop=True)
 
