@@ -188,8 +188,8 @@ if uploaded_files:
         # ----------------------------
         st.subheader("📄 Combined Sold Volume Data")
 
-        # Filter by year
-        years_available = sorted(combined["Year"].unique())
+        # Filter by year — safely handles mixed int/"Unknown" types
+        years_available = sorted(combined["Year"].unique(), key=lambda x: (str(x) == "Unknown", x))
         selected_years = st.multiselect(
             "Filter by year (leave blank to show all):",
             options=years_available,
