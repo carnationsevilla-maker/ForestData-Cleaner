@@ -1,5 +1,3 @@
-pip install streamlit pdfplumber 
-pip install streamlit pandas 
 import streamlit as st
 import pdfplumber
 import pandas as pd
