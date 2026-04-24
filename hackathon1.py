@@ -39,25 +39,20 @@ def parse_year(filename):
 # ----------------------------
 def extract_sold_volume(uploaded_file):
     all_rows = []
-
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
             if table:
                 all_rows.extend(table)
-
     if not all_rows:
         return None
-
     df = pd.DataFrame(all_rows)
-
     # Fix header
     header = df.iloc[0].tolist()
     header = [
         " ".join(map(str, h)) if isinstance(h, (list, tuple)) else str(h).strip()
         for h in header
     ]
-
     seen = {}
     clean_header = []
     for h in header:
@@ -69,48 +64,47 @@ def extract_sold_volume(uploaded_file):
         else:
             seen[h] = 0
         clean_header.append(h)
-
     df.columns = clean_header
     df = df[1:].reset_index(drop=True)
-
     # Drop fully empty columns
     df = df.dropna(axis=1, how="all")
     df.columns = [str(c).strip() for c in df.columns]
-
     # ----------------------------
     # Find the sold volume column — prioritize MBF
     # ----------------------------
     sold_col = None
-
+    # 1st priority: sold volume MBF
     for col in df.columns:
         if re.search(r"sold.{0,20}mbf", col, re.IGNORECASE):
             sold_col = col
             break
+    # 2nd priority: any MBF column
     if not sold_col:
         for col in df.columns:
             if "mbf" in col.lower():
                 sold_col = col
                 break
+    # 3rd priority: sold + volume together
     if not sold_col:
         for col in df.columns:
             if re.search(r"sold.{0,10}vol", col, re.IGNORECASE):
                 sold_col = col
                 break
+    # 4th priority: any volume column
     if not sold_col:
         for col in df.columns:
             if "volume" in col.lower():
                 sold_col = col
                 break
+    # 5th priority: any sold column
     if not sold_col:
         for col in df.columns:
             if "sold" in col.lower():
                 sold_col = col
                 break
-
     if not sold_col:
         return None
-
-    # Clean numeric helper
+    # Clean the sold volume column
     def clean_numeric(x):
         try:
             if isinstance(x, (list, tuple)):
@@ -121,53 +115,38 @@ def extract_sold_volume(uploaded_file):
             return float(x)
         except Exception:
             return None
-
     df[sold_col] = df[sold_col].apply(clean_numeric)
     df = df.dropna(subset=[sold_col])
-
-    if df.empty:
-        return None
-
     # ----------------------------
-    # Year and region always from filename
+    # Year and region from filename
     # ----------------------------
     region = parse_region(uploaded_file.name)
     year = parse_year(uploaded_file.name)
-
     result = df[[sold_col]].copy()
     result.columns = ["Sold Volume (MBF)"]
     result["Year"] = year if year else "Unknown"
     result["Region"] = region
-
     return result[["Region", "Year", "Sold Volume (MBF)"]]
-
 
 # ----------------------------
 # MAIN PROCESS
 # ----------------------------
 if uploaded_files:
     all_results = []
-
     for uploaded_file in uploaded_files:
         with st.spinner(f"Processing {uploaded_file.name}..."):
             result = extract_sold_volume(uploaded_file)
-            region = parse_region(uploaded_file.name)
-            year = parse_year(uploaded_file.name)
-
             if result is None:
                 st.warning(f"⚠️ Could not extract sold volume from `{uploaded_file.name}`. Skipping.")
             else:
+                region = parse_region(uploaded_file.name)
+                year = parse_year(uploaded_file.name)
                 year_label = str(year) if year else "Unknown Year"
                 st.success(f"✅ `{uploaded_file.name}` → **{region}** | **{year_label}** — {len(result)} rows extracted")
                 all_results.append(result)
-
     if all_results:
         combined = pd.concat(all_results, ignore_index=True)
-
-        # Aggregate to one total per region per year
         combined = combined.groupby(["Year", "Region"], as_index=False)["Sold Volume (MBF)"].sum()
-
-        # Safe sort — handles mixed int/"Unknown" values
         combined = combined.iloc[
             sorted(range(len(combined)), key=lambda i: (
                 str(combined.iloc[i]["Year"]) == "Unknown",
@@ -175,12 +154,10 @@ if uploaded_files:
                 combined.iloc[i]["Region"]
             ))
         ].reset_index(drop=True)
-
         # ----------------------------
         # 📄 COMBINED DATA TABLE
         # ----------------------------
         st.subheader("📄 Combined Sold Volume Data")
-
         years_available = sorted(
             combined["Year"].unique(),
             key=lambda x: (str(x) == "Unknown", x)
@@ -192,9 +169,8 @@ if uploaded_files:
         )
         filtered = combined[combined["Year"].isin(selected_years)]
         st.dataframe(filtered)
-
         # ----------------------------
-        # 📊 PIVOT TABLE — rows = Year, columns = Region
+        # 📊 PIVOT TABLE
         # ----------------------------
         st.subheader("📊 Sold Volume (MBF) by Year & Region (Pivot)")
         pivot = filtered.pivot_table(
@@ -204,8 +180,6 @@ if uploaded_files:
             aggfunc="sum"
         )
         pivot["Grand Total"] = pivot.sum(axis=1)
-
-        # Safe sort — handles mixed int/"Unknown" index
         pivot = pivot.iloc[
             sorted(range(len(pivot)), key=lambda i: (
                 str(pivot.index[i]) == "Unknown",
@@ -213,13 +187,11 @@ if uploaded_files:
             ))
         ]
         st.dataframe(pivot.style.format("{:,.2f}"))
-
         # ----------------------------
-        # 📈 CHART — each region is its own line, x axis = year
+        # 📈 CHART
         # ----------------------------
         st.subheader("📈 Sold Volume (MBF) Over Time by Region")
         st.line_chart(pivot.drop(columns=["Grand Total"]))
-
         # ----------------------------
         # ⚠️ DATA QUALITY REPORT
         # ----------------------------
@@ -227,19 +199,18 @@ if uploaded_files:
         st.write(f"Files processed: {len(all_results)}")
         st.write(f"Years found: {', '.join(str(y) for y in years_available)}")
         st.write(f"Regions found: {', '.join(sorted(combined['Region'].unique()))}")
-        st.write(f"Total rows: {len(combined)}")
+        st.write(f"Total rows extracted: {len(combined)}")
         missing = combined.isnull().sum().sum()
+        st.write(f"Missing values: {missing}")
         if missing == 0:
             st.success("No missing values detected!")
         else:
-            st.write(f"Missing values: {missing}")
+            st.write("Columns with issues:")
             st.write(combined.isnull().sum()[combined.isnull().sum() > 0])
-
         # ----------------------------
         # 💾 DOWNLOADS
         # ----------------------------
         st.subheader("💾 Downloads")
-
         csv_combined = combined.to_csv(index=False).encode("utf-8")
         st.download_button(
             "💾 Download Raw Combined Data (CSV)",
@@ -247,7 +218,6 @@ if uploaded_files:
             "sold_volume_combined.csv",
             "text/csv"
         )
-
         csv_pivot = pivot.to_csv().encode("utf-8")
         st.download_button(
             "💾 Download Pivot Table (CSV)",
